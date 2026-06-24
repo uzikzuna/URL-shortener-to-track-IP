@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { 
   Search, Link2, ExternalLink, BarChart3, Copy, Check, QrCode, Trash2, 
   Calendar, AlertCircle, Lock, Sparkles, Filter, Edit3, ShieldAlert,
-  Power, PowerOff, Hash, FolderOpen, AlertTriangle, Eye, FileText, Image
+  Power, PowerOff, Hash, FolderOpen, AlertTriangle, Eye, FileText, Image, Compass
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Link } from '../types';
@@ -12,6 +12,7 @@ interface LinkListProps {
   onSelectLink: (link: Link) => void;
   onLinkDeleted: (id: number) => void;
   onLinkUpdated: (updatedLink: Link) => void;
+  onDebugLink?: (link: Link) => void;
   selectedLinkId?: number;
   isAdmin: boolean;
 }
@@ -21,6 +22,7 @@ export default function LinkList({
   onSelectLink, 
   onLinkDeleted, 
   onLinkUpdated,
+  onDebugLink,
   selectedLinkId,
   isAdmin
 }: LinkListProps) {
@@ -424,6 +426,16 @@ export default function LinkList({
                       {/* EDIT (Gated by admin role) */}
                       {isAdmin && (
                         <>
+                          {onDebugLink && (
+                            <button
+                              onClick={() => onDebugLink(link)}
+                              className="p-2 rounded-lg bg-white/5 hover:bg-cyan-500/10 text-slate-300 hover:text-cyan-400 transition-colors cursor-pointer"
+                              title="Inspect in Metadata Diagnostic HUD"
+                            >
+                              <Compass className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+
                           <button
                             onClick={() => openEditPanel(link)}
                             className="p-2 rounded-lg bg-white/5 hover:bg-cyan-500/10 text-slate-300 hover:text-cyan-400 transition-colors cursor-pointer"

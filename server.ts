@@ -6,6 +6,7 @@ import {
   getDb, 
   createLink, 
   getLinkByCode, 
+  getLinkById,
   getLinks, 
   deleteLink, 
   recordVisit, 
@@ -401,6 +402,41 @@ async function fetchWithMetascraper(html: string, urlStr: string): Promise<any> 
   return null;
 }
 
+async function verifyExtractedImage(imageUrl: string): Promise<{ success: boolean; width: number; height: number }> {
+  try {
+    if (!imageUrl || !imageUrl.startsWith('http')) {
+      return { success: false, width: 0, height: 0 };
+    }
+    const response = await axios.get(imageUrl, {
+      responseType: 'arraybuffer',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+        'Accept': 'image/*'
+      },
+      timeout: 3000
+    });
+    
+    if (response.status !== 200) {
+      return { success: false, width: 0, height: 0 };
+    }
+    
+    const buffer = Buffer.from(response.data);
+    const meta = await sharp(buffer).metadata();
+    return {
+      success: true,
+      width: meta.width || 0,
+      height: meta.height || 0
+    };
+  } catch (err) {
+    return { success: false, width: 0, height: 0 };
+  }
+}
+
+function getYoutubeVideoId(urlStr: string): string | null {
+  const ytMatch = urlStr.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/ ]{11})/i);
+  return ytMatch ? ytMatch[1] : null;
+}
+
 async function fetchLinkMetadata(urlStr: string): Promise<DestinationMetadata> {
   const domain = (() => {
     try {
@@ -417,59 +453,80 @@ async function fetchLinkMetadata(urlStr: string): Promise<DestinationMetadata> {
   let image = '';
   let favicon = '';
 
-  // 1. Try fetching with open-graph-scraper
-  const ogsData = await fetchWithOgs(urlStr);
-  if (ogsData) {
-    title = ogsData.title;
-    description = ogsData.description;
-    image = ogsData.image;
-    favicon = ogsData.favicon;
+  // 1. YouTube specific thumbnail logic: Automatically use highest resolution available
+  const videoId = getYoutubeVideoId(urlStr);
+  if (videoId) {
+    const ytCandidates = [
+      `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
+      `https://img.youtube.com/vi/${videoId}/sddefault.jpg`,
+      `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
+      `https://img.youtube.com/vi/${videoId}/default.jpg`
+    ];
+    for (const candidate of ytCandidates) {
+      const check = await verifyExtractedImage(candidate);
+      if (check.success && check.width > 600) {
+        image = candidate;
+        break;
+      }
+    }
   }
 
-  // 2. Fetch raw HTML for metascraper and regex as robust fallbacks
-  if (!title || !description || !image) {
-    try {
-      const response = await axios.get(urlStr, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        },
-        timeout: 4000
-      });
+  // 2. Fetch general websites
+  if (!videoId) {
+    // Try fetching with open-graph-scraper
+    const ogsData = await fetchWithOgs(urlStr);
+    if (ogsData) {
+      title = ogsData.title;
+      description = ogsData.description;
+      image = ogsData.image;
+      favicon = ogsData.favicon;
+    }
 
-      if (response.status === 200) {
-        const html = response.data;
+    // Fetch raw HTML for metascraper and regex as robust fallbacks
+    if (!title || !description || !image) {
+      try {
+        const response = await axios.get(urlStr, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          },
+          timeout: 4000
+        });
 
-        // Try metascraper
-        const msData = await fetchWithMetascraper(html, urlStr);
-        if (msData) {
-          if (!title) title = msData.title;
-          if (!description) description = msData.description;
-          if (!image) image = msData.image;
-          if (!favicon) favicon = msData.favicon;
-        }
+        if (response.status === 200) {
+          const html = response.data;
 
-        // Regex fallbacks
-        if (!title) {
-          const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-          title = titleMatch ? titleMatch[1].trim() : '';
+          // Try metascraper
+          const msData = await fetchWithMetascraper(html, urlStr);
+          if (msData) {
+            if (!title) title = msData.title;
+            if (!description) description = msData.description;
+            if (!image) image = msData.image;
+            if (!favicon) favicon = msData.favicon;
+          }
+
+          // Regex fallbacks
+          if (!title) {
+            const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+            title = titleMatch ? titleMatch[1].trim() : '';
+          }
+          if (!description) {
+            const descMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i) ||
+                              html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["']/i);
+            description = descMatch ? descMatch[1].trim() : '';
+          }
+          if (!image) {
+            const ogImgMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
+            image = ogImgMatch ? ogImgMatch[1].trim() : '';
+          }
+          if (!favicon) {
+            const favMatch = html.match(/<link[^>]+rel=["'](?:shortcut )?icon["'][^>]+href=["']([^"']+)["']/i);
+            favicon = favMatch ? favMatch[1].trim() : '';
+          }
         }
-        if (!description) {
-          const descMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i) ||
-                            html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["']/i);
-          description = descMatch ? descMatch[1].trim() : '';
-        }
-        if (!image) {
-          const ogImgMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
-          image = ogImgMatch ? ogImgMatch[1].trim() : '';
-        }
-        if (!favicon) {
-          const favMatch = html.match(/<link[^>]+rel=["'](?:shortcut )?icon["'][^>]+href=["']([^"']+)["']/i);
-          favicon = favMatch ? favMatch[1].trim() : '';
-        }
+      } catch (err) {
+        // Ignore network errors
       }
-    } catch (err) {
-      // Ignore network errors
     }
   }
 
@@ -488,6 +545,13 @@ async function fetchLinkMetadata(urlStr: string): Promise<DestinationMetadata> {
 
   if (image) {
     image = resolveUrl(urlStr, image);
+    // Before saving / verifying, check if image loads successfully and width > 600px
+    const check = await verifyExtractedImage(image);
+    if (!check.success || check.width <= 600) {
+      // Discard image as it is invalid or too small.
+      // This will ensure we fall back to a beautifully generated custom preview image server-side.
+      image = '';
+    }
   }
 
   if (favicon) {
@@ -507,10 +571,12 @@ async function fetchLinkMetadata(urlStr: string): Promise<DestinationMetadata> {
   };
 }
 
-async function getCachedLinkMetadata(urlStr: string): Promise<DestinationMetadata> {
-  const cached = metadataCache.get<DestinationMetadata>(urlStr);
-  if (cached) {
-    return cached;
+async function getCachedLinkMetadata(urlStr: string, forceRefresh = false): Promise<DestinationMetadata> {
+  if (!forceRefresh) {
+    const cached = metadataCache.get<DestinationMetadata>(urlStr);
+    if (cached) {
+      return cached;
+    }
   }
   const data = await fetchLinkMetadata(urlStr);
   metadataCache.set(urlStr, data);
@@ -1248,6 +1314,119 @@ async function startServer() {
     }
   });
 
+  // Real-time metadata debug and social crawler compatibility check
+  app.get('/api/metadata/debug', rateLimiter(60, 60 * 1000), async (req, res) => {
+    const { url } = req.query;
+    if (!url || typeof url !== 'string') {
+      res.status(400).json({ error: 'URL query parameter is required' });
+      return;
+    }
+
+    let formattedUrl = url.trim();
+    if (!/^https?:\/\//i.test(formattedUrl)) {
+      formattedUrl = 'https://' + formattedUrl;
+    }
+
+    try {
+      new URL(formattedUrl);
+    } catch (e) {
+      res.status(400).json({ error: 'Invalid URL structure' });
+      return;
+    }
+
+    try {
+      // Force bypass cache for live preview debugging
+      const metadata = await fetchLinkMetadata(formattedUrl);
+      
+      let imageLoads = false;
+      let imageWidth = 0;
+      let imageHeight = 0;
+      let imageError = '';
+      
+      if (metadata.image) {
+        try {
+          const check = await verifyExtractedImage(metadata.image);
+          imageLoads = check.success;
+          imageWidth = check.width;
+          imageHeight = check.height;
+          if (!check.success) {
+            imageError = 'Image failed to resolve or returns non-200 status code.';
+          } else if (check.width <= 600) {
+            imageError = `Image width is ${check.width}px, which is below the 600px requirement for rich visual layout.`;
+          }
+        } catch (e: any) {
+          imageError = e.message || 'Image validation error';
+        }
+      } else {
+        imageError = 'No Open Graph image or metadata image was broadcasted by the host.';
+      }
+
+      const crawlers = [
+        { name: 'Messenger', reqWidth: 600, reqDesc: true },
+        { name: 'Facebook', reqWidth: 600, reqDesc: true },
+        { name: 'Discord', reqWidth: 400, reqDesc: false },
+        { name: 'Telegram', reqWidth: 300, reqDesc: true },
+        { name: 'WhatsApp', reqWidth: 300, reqDesc: true },
+        { name: 'LinkedIn', reqWidth: 1200, reqDesc: true },
+        { name: 'X (Twitter)', reqWidth: 600, reqDesc: true }
+      ];
+
+      const crawlerStatus = crawlers.map(c => {
+        let ok = true;
+        let details: string[] = [];
+        
+        if (!metadata.title) {
+          ok = false;
+          details.push('Missing Title tag');
+        }
+        
+        if (c.reqDesc && (!metadata.description || metadata.description.length < 10)) {
+          ok = false;
+          details.push('Missing or short Description tag');
+        }
+
+        if (!metadata.image) {
+          ok = false;
+          details.push('Missing Open Graph Image');
+        } else {
+          if (!imageLoads) {
+            ok = false;
+            details.push('Image fails to load/resolve');
+          } else if (imageWidth < c.reqWidth) {
+            ok = false;
+            details.push(`Image width (${imageWidth}px) is less than recommended (${c.reqWidth}px)`);
+          }
+        }
+
+        return {
+          name: c.name,
+          ok,
+          details: ok ? 'Excellent compatibility' : details.join(', ')
+        };
+      });
+
+      const ogStatus = {
+        hasTitle: !!metadata.title && metadata.title !== 'Secure Redirect',
+        hasDescription: !!metadata.description && !metadata.description.includes('Establish dynamic connection tunnel'),
+        hasImage: !!metadata.image,
+        imageLoads,
+        imageWidth,
+        imageHeight,
+        imageError,
+        isCompatible: !!metadata.title && metadata.title !== 'Secure Redirect' && !!metadata.description && !!metadata.image && imageLoads && imageWidth > 600
+      };
+
+      res.json({
+        url: formattedUrl,
+        metadata,
+        ogStatus,
+        crawlerStatus
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to analyze metadata' });
+    }
+  });
+
   // Bulk create links
   app.post('/api/links/bulk', rateLimiter(15, 60 * 1000), async (req, res) => {
     const { items, category, tags, enablePreview } = req.body;
@@ -1363,6 +1542,60 @@ async function startServer() {
       }
     } catch (error: any) {
       res.status(500).json({ error: error.message || 'Failed to update link' });
+    }
+  });
+
+  // Force refresh metadata for a link
+  app.post('/api/links/:id/refresh-metadata', rateLimiter(30, 60 * 1000), async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      res.status(400).json({ error: 'Invalid ID' });
+      return;
+    }
+
+    try {
+      const link = await getLinkById(id);
+      if (!link) {
+        res.status(404).json({ error: 'Link not found' });
+        return;
+      }
+
+      // Force get fresh metadata
+      const metadata = await getCachedLinkMetadata(link.original_url, true).catch(() => null);
+      if (!metadata) {
+        res.status(500).json({ error: 'Failed to retrieve metadata during refresh' });
+        return;
+      }
+
+      const cleanTitle = metadata.title || new URL(link.original_url).hostname;
+      const cleanDesc = metadata.description || '';
+      const cleanImg = metadata.image || '';
+
+      // Update link with fresh metadata
+      const success = await updateLink(id, {
+        title: cleanTitle,
+        custom_description: cleanDesc,
+        custom_image_url: cleanImg
+      });
+
+      if (success) {
+        await createActivityLog('Metadata Refreshed', `Refreshed and verified metadata for link ID ${id}`, req.ip || '127.0.0.1');
+        res.json({ 
+          success: true, 
+          message: 'Metadata successfully refreshed',
+          metadata: {
+            title: cleanTitle,
+            description: cleanDesc,
+            image: cleanImg,
+            domain: metadata.domain,
+            platform: metadata.platform
+          }
+        });
+      } else {
+        res.status(500).json({ error: 'Failed to update link metadata' });
+      }
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || 'Failed to refresh metadata' });
     }
   });
 

@@ -286,6 +286,17 @@ export async function getLinkByCode(shortCode: string): Promise<Link | null> {
   }
 }
 
+export async function getLinkById(id: number): Promise<Link | null> {
+  await getDb();
+  if (useJsonFallback) {
+    const link = jsonDbState.links.find(l => l.id === id);
+    return link ? { ...link } : null;
+  } else {
+    const link = await dbInstance.get('SELECT * FROM links WHERE id = ?', [id]);
+    return link || null;
+  }
+}
+
 export async function getLinks(): Promise<Link[]> {
   await getDb();
   if (useJsonFallback) {

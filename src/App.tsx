@@ -13,6 +13,7 @@ import PrivacyBanner from './components/PrivacyBanner';
 import DeploymentGuide from './components/DeploymentGuide';
 import SecureCore from './components/SecureCore';
 import ThemeEditor, { applyThemeToCSSVariables, THEME_PRESETS } from './components/ThemeEditor';
+import PreviewDebugPanel from './components/PreviewDebugPanel';
 
 export default function App() {
   const [links, setLinks] = useState<Link[]>([]);
@@ -21,8 +22,8 @@ export default function App() {
   const [showDeploymentGuide, setShowDeploymentGuide] = useState(false);
   const [loadingLinks, setLoadingLinks] = useState(true);
   
-  // Tab control: 'workspace' | 'analytics' | 'theme' | 'admin'
-  const [activeTab, setActiveTab] = useState<'workspace' | 'analytics' | 'theme' | 'admin'>('workspace');
+  // Tab control: 'workspace' | 'analytics' | 'theme' | 'admin' | 'diagnostics'
+  const [activeTab, setActiveTab] = useState<'workspace' | 'analytics' | 'theme' | 'admin' | 'diagnostics'>('workspace');
 
   // Load and apply custom theme from localStorage on load
   useEffect(() => {
@@ -306,6 +307,18 @@ export default function App() {
           >
             HUD ANALYTICS
           </button>
+          
+          <button
+            onClick={() => setActiveTab('diagnostics')}
+            className={`flex-1 py-2 rounded-lg text-center font-bold uppercase transition-all tracking-wider cursor-pointer ${
+              activeTab === 'diagnostics' 
+                ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20' 
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            DIAGNOSTIC HUD
+          </button>
+
           <button
             onClick={() => setActiveTab('admin')}
             className={`flex-1 py-2 rounded-lg text-center font-bold uppercase transition-all tracking-wider flex items-center justify-center gap-1.5 cursor-pointer ${
@@ -346,6 +359,10 @@ export default function App() {
                       setSelectedLink(link);
                       setActiveTab('analytics'); // Swapping tabs to focus map instantly
                     }}
+                    onDebugLink={(link) => {
+                      setSelectedLink(link);
+                      setActiveTab('diagnostics'); // Swapping tabs to focus diagnostics instantly
+                    }}
                     onLinkDeleted={handleLinkDeleted}
                     onLinkUpdated={handleLinkUpdated}
                     selectedLinkId={selectedLink?.id}
@@ -367,6 +384,16 @@ export default function App() {
                   selectedLink={selectedLink}
                   onClearSelection={() => setSelectedLink(null)}
                   refreshTrigger={refreshTrigger}
+                />
+              </div>
+            )}
+
+            {activeTab === 'diagnostics' && (
+              <div className="max-w-7xl">
+                <PreviewDebugPanel 
+                  initialUrl={selectedLink?.original_url || ''} 
+                  linkId={selectedLink?.id} 
+                  onRefreshSuccess={handleRefreshDashboard} 
                 />
               </div>
             )}
