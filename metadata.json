@@ -1,0 +1,6 @@
+{
+  "name": "UZK OS",
+  "description": "A futuristic link operating system and analytics command center featuring multi-theme support, holographic previews, and security variables.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
